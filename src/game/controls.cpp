@@ -1,14 +1,32 @@
 #include <array>
+#include <cmath>
+#include <mutex>
 
 #include "librecomp/helpers.hpp"
 #include "recomp_input.h"
 #include "ultramodern/ultramodern.hpp"
 
 // Arrays that hold the mappings for every input for keyboard and controller respectively.
+// Now per-port: index by [port][input][binding].
 using input_mapping = std::array<recomp::InputField, recomp::bindings_per_input>;
 using input_mapping_array = std::array<input_mapping, static_cast<size_t>(recomp::GameInput::COUNT)>;
-static input_mapping_array keyboard_input_mappings{};
-static input_mapping_array controller_input_mappings{};
+static std::array<input_mapping_array, recomp::max_ports> keyboard_input_mappings{};
+static std::array<input_mapping_array, recomp::max_ports> controller_input_mappings{};
+static std::array<recomp::StickCalibration, recomp::max_ports> stick_calibrations{};
+static std::mutex stick_calibrations_mutex;
+
+recomp::StickCalibration recomp::get_stick_calibration(int port) {
+    if (port < 0 || port >= recomp::max_ports) return {};
+    std::lock_guard lock{stick_calibrations_mutex};
+    return stick_calibrations[port];
+}
+
+bool recomp::set_stick_calibration(int port, const StickCalibration& calibration) {
+    if (port < 0 || port >= recomp::max_ports || !calibration.valid()) return false;
+    std::lock_guard lock{stick_calibrations_mutex};
+    stick_calibrations[port] = calibration;
+    return true;
+}
 
 // Make the button value array, which maps a button index to its bit field.
 #define DEFINE_INPUT(name, value, readable) uint16_t(value##u),
@@ -52,9 +70,16 @@ recomp::GameInput recomp::get_input_from_enum_name(const std::string_view enum_n
     return static_cast<recomp::GameInput>(find_it - input_enum_names.begin());
 }
 
-// Due to an RmlUi limitation this can't be const. Ideally it would return a const reference or even just a straight up copy.
+// Backward-compat overload: port 0
 recomp::InputField& recomp::get_input_binding(GameInput input, size_t binding_index, recomp::InputDevice device) {
-    input_mapping_array& device_mappings = (device == recomp::InputDevice::Controller) ?  controller_input_mappings : keyboard_input_mappings;
+    return get_input_binding(input, binding_index, device, 0);
+}
+
+recomp::InputField& recomp::get_input_binding(GameInput input, size_t binding_index, recomp::InputDevice device, int port) {
+    if (port < 0 || port >= recomp::max_ports) port = 0;
+    input_mapping_array& device_mappings = (device == recomp::InputDevice::Controller)
+        ? controller_input_mappings[port]
+        : keyboard_input_mappings[port];
     input_mapping& cur_input_mapping = device_mappings.at(static_cast<size_t>(input));
 
     if (binding_index < cur_input_mapping.size()) {
@@ -66,8 +91,16 @@ recomp::InputField& recomp::get_input_binding(GameInput input, size_t binding_in
     }
 }
 
+// Backward-compat overload: port 0
 void recomp::set_input_binding(recomp::GameInput input, size_t binding_index, recomp::InputDevice device, recomp::InputField value) {
-    input_mapping_array& device_mappings = (device == recomp::InputDevice::Controller) ?  controller_input_mappings : keyboard_input_mappings;
+    set_input_binding(input, binding_index, device, value, 0);
+}
+
+void recomp::set_input_binding(recomp::GameInput input, size_t binding_index, recomp::InputDevice device, recomp::InputField value, int port) {
+    if (port < 0 || port >= recomp::max_ports) port = 0;
+    input_mapping_array& device_mappings = (device == recomp::InputDevice::Controller)
+        ? controller_input_mappings[port]
+        : keyboard_input_mappings[port];
     input_mapping& cur_input_mapping = device_mappings.at(static_cast<size_t>(input));
 
     if (binding_index < cur_input_mapping.size()) {
@@ -75,37 +108,77 @@ void recomp::set_input_binding(recomp::GameInput input, size_t binding_index, re
     }
 }
 
+ultramodern::input::connected_device_info_t recomp::get_connected_device_info(int controller_num) {
+    bool connected = controller_num >= 0 && controller_num < recomp::max_ports
+        && recomp::get_port_mode(controller_num) != recomp::ControllerPortMode::Off;
+    return {
+        .connected_device = connected ? ultramodern::input::Device::Controller : ultramodern::input::Device::None,
+        // Controller Pak storage is not emulated, so advertise no accessory.
+        .connected_pak = ultramodern::input::Pak::None,
+    };
+}
+
 bool recomp::get_n64_input(int controller_num, uint16_t* buttons_out, float* x_out, float* y_out) {
     uint16_t cur_buttons = 0;
     float cur_x = 0.0f;
     float cur_y = 0.0f;
-    
-    if (controller_num != 0) {
+
+    if (controller_num < 0 || controller_num >= recomp::max_ports) {
+        *buttons_out = 0;
+        *x_out = 0.0f;
+        *y_out = 0.0f;
+        return false;
+    }
+
+    recomp::ControllerPortMode mode = recomp::get_port_mode(controller_num);
+    if (mode == recomp::ControllerPortMode::Off) {
+        *buttons_out = 0;
+        *x_out = 0.0f;
+        *y_out = 0.0f;
         return false;
     }
 
     if (!recomp::game_input_disabled()) {
-        for (size_t i = 0; i < n64_button_values.size(); i++) {
-            size_t input_index = (size_t)GameInput::N64_BUTTON_START + i;
-            cur_buttons |= recomp::get_input_digital(keyboard_input_mappings[input_index]) ? n64_button_values[i] : 0;
-            cur_buttons |= recomp::get_input_digital(controller_input_mappings[input_index]) ? n64_button_values[i] : 0;
+        input_mapping_array& kb_mappings = keyboard_input_mappings[controller_num];
+        input_mapping_array& ct_mappings = controller_input_mappings[controller_num];
+
+        if (mode == recomp::ControllerPortMode::Keyboard) {
+            // Keyboard mode: read only keyboard bindings for this port
+            for (size_t i = 0; i < n64_button_values.size(); i++) {
+                size_t input_index = (size_t)GameInput::N64_BUTTON_START + i;
+                cur_buttons |= recomp::get_input_digital(kb_mappings[input_index]) ? n64_button_values[i] : 0;
+            }
+
+            cur_x = recomp::get_input_analog(kb_mappings[(size_t)GameInput::X_AXIS_POS])
+                    - recomp::get_input_analog(kb_mappings[(size_t)GameInput::X_AXIS_NEG]);
+
+            cur_y = recomp::get_input_analog(kb_mappings[(size_t)GameInput::Y_AXIS_POS])
+                    - recomp::get_input_analog(kb_mappings[(size_t)GameInput::Y_AXIS_NEG]);
         }
+        else if (mode == recomp::ControllerPortMode::Controller) {
+            // Controller mode: read only the gamepad assigned to this port
+            for (size_t i = 0; i < n64_button_values.size(); i++) {
+                size_t input_index = (size_t)GameInput::N64_BUTTON_START + i;
+                cur_buttons |= recomp::get_input_digital_port(ct_mappings[input_index], controller_num) ? n64_button_values[i] : 0;
+            }
 
-        float joystick_deadzone = recomp::get_joystick_deadzone() / 100.0f;
+            float joystick_x = recomp::get_input_analog_port(ct_mappings[(size_t)GameInput::X_AXIS_POS], controller_num)
+                            - recomp::get_input_analog_port(ct_mappings[(size_t)GameInput::X_AXIS_NEG], controller_num);
 
-        float joystick_x = recomp::get_input_analog(controller_input_mappings[(size_t)GameInput::X_AXIS_POS])
-                        - recomp::get_input_analog(controller_input_mappings[(size_t)GameInput::X_AXIS_NEG]);
+            float joystick_y = recomp::get_input_analog_port(ct_mappings[(size_t)GameInput::Y_AXIS_POS], controller_num)
+                            - recomp::get_input_analog_port(ct_mappings[(size_t)GameInput::Y_AXIS_NEG], controller_num);
 
-        float joystick_y = recomp::get_input_analog(controller_input_mappings[(size_t)GameInput::Y_AXIS_POS])
-                        - recomp::get_input_analog(controller_input_mappings[(size_t)GameInput::Y_AXIS_NEG]);
+            recomp::get_stick_calibration(controller_num).apply(joystick_x, joystick_y);
+            recomp::apply_joystick_deadzone(joystick_x, joystick_y, &joystick_x, &joystick_y);
 
-        recomp::apply_joystick_deadzone(joystick_x, joystick_y, &joystick_x, &joystick_y);
-
-        cur_x = recomp::get_input_analog(keyboard_input_mappings[(size_t)GameInput::X_AXIS_POS])
-                - recomp::get_input_analog(keyboard_input_mappings[(size_t)GameInput::X_AXIS_NEG]) + joystick_x;
-
-        cur_y = recomp::get_input_analog(keyboard_input_mappings[(size_t)GameInput::Y_AXIS_POS])
-                - recomp::get_input_analog(keyboard_input_mappings[(size_t)GameInput::Y_AXIS_NEG]) + joystick_y;
+            // Adapters and worn N64 sticks may not reach the full reported range.
+            // Limit both axes together to retain the stick's direction at saturation.
+            float sensitivity = recomp::get_stick_sensitivity(controller_num) / 100.0f;
+            float max_axis = std::max(std::fabs(joystick_x), std::fabs(joystick_y));
+            float scale = max_axis > 0.0f ? std::min(sensitivity, 1.0f / max_axis) : sensitivity;
+            cur_x = joystick_x * scale;
+            cur_y = joystick_y * scale;
+        }
     }
 
     *buttons_out = cur_buttons;

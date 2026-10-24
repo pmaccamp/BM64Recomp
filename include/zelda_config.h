@@ -15,9 +15,13 @@ namespace zelda64 {
     void save_config();
     
     void reset_input_bindings();
+    void reset_input_bindings(int port);
     void reset_cont_input_bindings();
+    void reset_cont_input_bindings(int port);
     void reset_kb_input_bindings();
+    void reset_kb_input_bindings(int port);
     void reset_single_input_binding(recomp::InputDevice device, recomp::GameInput input);
+    void reset_single_input_binding(recomp::InputDevice device, recomp::GameInput input, int port);
 
     std::filesystem::path get_app_folder_path();
     
@@ -30,17 +34,6 @@ namespace zelda64 {
         OptionCount
     };
 
-    enum GenericOnOffOption {
-        On,
-        Off,
-        OptionCount
-    };
-
-    NLOHMANN_JSON_SERIALIZE_ENUM(zelda64::GenericOnOffOption, {
-        {zelda64::GenericOnOffOption::On, "On"},
-        {zelda64::GenericOnOffOption::Off, "Off"}
-    });
-
     enum class CustomBombermanMode {
         On,
         Off,
@@ -50,6 +43,11 @@ namespace zelda64 {
     NLOHMANN_JSON_SERIALIZE_ENUM(zelda64::FilmGrainMode, {
         {zelda64::FilmGrainMode::On, "On"},
         {zelda64::FilmGrainMode::Off, "Off"}
+    });
+
+    NLOHMANN_JSON_SERIALIZE_ENUM(zelda64::CustomBombermanMode, {
+        {zelda64::CustomBombermanMode::On, "On"},
+        {zelda64::CustomBombermanMode::Off, "Off"}
     });
 
     enum class TargetingMode {

@@ -5,15 +5,13 @@
 #include "zelda_debug.h"
 #include "zelda_render.h"
 #include "zelda_support.h"
-#include "zelda_cheats.h"
 #include "promptfont.h"
 #include "ultramodern/config.hpp"
 #include "ultramodern/ultramodern.hpp"
 #include "RmlUi/Core.h"
 
 #include "core/ui_context.h"
-
-#include <algorithm>
+#include <chrono>
 
 ultramodern::renderer::GraphicsConfig new_options;
 Rml::DataModelHandle nav_help_model_handle;
@@ -21,7 +19,6 @@ Rml::DataModelHandle general_model_handle;
 Rml::DataModelHandle controls_model_handle;
 Rml::DataModelHandle graphics_model_handle;
 Rml::DataModelHandle sound_options_model_handle;
-Rml::DataModelHandle cheats_model_handle;
 
 // True if controller config menu is open, false if keyboard config menu is open, undefined otherwise
 bool configuring_controller = false;
@@ -36,8 +33,6 @@ int recompui::config_tab_to_index(recompui::ConfigTab tab) {
         return 2;
     case recompui::ConfigTab::Sound:
         return 3;
-    case recompui::ConfigTab::Cheats:
-        return 6;
     case recompui::ConfigTab::Mods:
         return 4;
     case recompui::ConfigTab::Debug:
@@ -101,6 +96,39 @@ static int scanned_binding_index = -1;
 static int scanned_input_index = -1;
 static int focused_input_index = -1;
 static int focused_config_option_index = -1;
+static int selected_port = 0;
+static int port_mode_index = 0; // 0=Off, 1=Keyboard, 2=Controller
+static int port_controller_index = -1;
+static std::vector<std::string> connected_controller_names;
+static recomp::StickCalibrationSession stick_calibration_session;
+static int calibration_port = -1;
+static int32_t calibration_controller_id = -1;
+static std::string calibration_message;
+
+static void dirty_calibration_variables() {
+    if (!controls_model_handle) return;
+    for (const char* name : {"calibrating_stick", "calibration_ready", "calibration_status", "stick_calibrated"}) {
+        controls_model_handle.DirtyVariable(name);
+    }
+}
+
+static void cancel_stick_calibration(const std::string& message = "") {
+    stick_calibration_session.cancel();
+    calibration_port = -1;
+    calibration_controller_id = -1;
+    calibration_message = message;
+    dirty_calibration_variables();
+}
+
+static void refresh_controller_list() {
+    connected_controller_names = recomp::get_connected_controller_names();
+    if (connected_controller_names.empty()) {
+        connected_controller_names.push_back("No controller detected");
+        port_controller_index = 0;
+    } else {
+        port_controller_index = recomp::get_port_controller_index(selected_port);
+    }
+}
 
 static bool msaa2x_supported = false;
 static bool msaa4x_supported = false;
@@ -116,7 +144,7 @@ int recomp::get_scanned_input_index() {
 }
 
 void recomp::finish_scanning_input(recomp::InputField scanned_field) {
-    recomp::set_input_binding(static_cast<recomp::GameInput>(scanned_input_index), scanned_binding_index, cur_device, scanned_field);
+    recomp::set_input_binding(static_cast<recomp::GameInput>(scanned_input_index), scanned_binding_index, cur_device, scanned_field, selected_port);
     scanned_input_index = -1;
     scanned_binding_index = -1;
     controls_model_handle.DirtyVariable("inputs");
@@ -190,6 +218,7 @@ void apply_graphics_config(void) {
 }
 
 void close_config_menu() {
+    cancel_stick_calibration();
     if (ultramodern::renderer::get_graphics_config() != new_options) {
         recompui::open_choice_prompt(
             "Graphics options have changed",
@@ -394,7 +423,7 @@ void zelda64::reset_sound_settings() {
 }
 
 void zelda64::set_main_volume(int volume) {
-    sound_options_context.main_volume.store(std::clamp(volume, 0, 100));
+    sound_options_context.main_volume.store(volume);
     if (sound_options_model_handle) {
         sound_options_model_handle.DirtyVariable("main_volume");
     }
@@ -405,7 +434,7 @@ int zelda64::get_main_volume() {
 }
 
 void zelda64::set_bgm_volume(int volume) {
-    sound_options_context.bgm_volume.store(std::clamp(volume, 0, 100));
+    sound_options_context.bgm_volume.store(volume);
     if (sound_options_model_handle) {
         sound_options_model_handle.DirtyVariable("bgm_volume");
     }
@@ -416,10 +445,10 @@ int zelda64::get_bgm_volume() {
 }
 
 void zelda64::set_sfx_volume(int volume) {
-    sound_options_context.sfx_volume.store(std::clamp(volume, 0, 100));
-    if (sound_options_model_handle) {
-        sound_options_model_handle.DirtyVariable("sfx_volume");
-    }
+    sound_options_context.sfx_volume.store(volume);
+	if (sound_options_model_handle) {
+		sound_options_model_handle.DirtyVariable("sfx_volume");
+	}
 }
 
 int zelda64::get_sfx_volume() {
@@ -427,10 +456,10 @@ int zelda64::get_sfx_volume() {
 }
 
 void zelda64::set_voice_volume(int volume) {
-    sound_options_context.voice_volume.store(std::clamp(volume, 0, 100));
-    if (sound_options_model_handle) {
-        sound_options_model_handle.DirtyVariable("voice_volume");
-    }
+    sound_options_context.voice_volume.store(volume);
+	if (sound_options_model_handle) {
+		sound_options_model_handle.DirtyVariable("voice_volume");
+	}
 }
 
 int zelda64::get_voice_volume() {
@@ -485,118 +514,33 @@ recompui::ContextId config_context;
 recompui::ContextId recompui::get_config_context_id() {
 	return config_context;
 }
-// ---------------------------------------
-// CHEATS
-// ---------------------------------------
 
-struct CheatsContext {
-    zelda64::GenericOnOffOption moonjump;
-    zelda64::GenericOnOffOption always_max_bomb;
-    zelda64::GenericOnOffOption always_max_fire;
-    zelda64::GenericOnOffOption always_have_remote_bombs;
-    zelda64::GenericOnOffOption always_have_red_bombs;
-    zelda64::GenericOnOffOption infinite_credits;
-    zelda64::GenericOnOffOption infinite_lives;
+bool recompui::is_stick_calibration_active() {
+    return stick_calibration_session.active();
+}
 
-    void reset() {
-        moonjump = zelda64::GenericOnOffOption::Off;
-        always_max_bomb = zelda64::GenericOnOffOption::Off;
-		always_max_fire = zelda64::GenericOnOffOption::Off;
-        always_have_remote_bombs = zelda64::GenericOnOffOption::Off;
-        always_have_red_bombs = zelda64::GenericOnOffOption::Off;
-        infinite_credits = zelda64::GenericOnOffOption::Off;
-        infinite_lives = zelda64::GenericOnOffOption::Off;
+void recompui::update_control_calibration() {
+    if (!stick_calibration_session.active()) return;
+    if (!recompui::is_context_shown(config_context) || recompui::is_prompt_open()
+        || calibration_port != selected_port) {
+        cancel_stick_calibration();
+        return;
     }
-
-    CheatsContext() {
-        reset();
+    float x, y;
+    int32_t controller_id;
+    if (!recomp::get_raw_controller_stick(calibration_port, &x, &y, &controller_id)
+        || controller_id != calibration_controller_id) {
+        cancel_stick_calibration("Calibration canceled: controller changed or disconnected. Previous settings kept.");
+        return;
     }
-};
-
-CheatsContext cheats_context;
-
-void zelda64::reset_cheats_settings() {
-    cheats_context.reset();
-    if (cheats_model_handle) {
-        cheats_model_handle.DirtyAllVariables();
-    }
-}
-
-zelda64::GenericOnOffOption zelda64::get_moonjump() {
-    return cheats_context.moonjump;
-}
-
-void zelda64::set_moonjump(zelda64::GenericOnOffOption mode) {
-    cheats_context.moonjump = mode;
-    if (cheats_model_handle) {
-        cheats_model_handle.DirtyVariable("moonjump");
-    }
-}
-
-zelda64::GenericOnOffOption zelda64::get_always_max_bomb() {
-    return cheats_context.always_max_bomb;
-}
-
-void zelda64::set_always_max_bomb(zelda64::GenericOnOffOption mode) {
-    cheats_context.always_max_bomb = mode;
-    if (cheats_model_handle) {
-        cheats_model_handle.DirtyVariable("always_max_bomb");
-    }
-}
-
-zelda64::GenericOnOffOption zelda64::get_always_max_fire() {
-    return cheats_context.always_max_fire;
-}
-
-void zelda64::set_always_max_fire(zelda64::GenericOnOffOption mode) {
-    cheats_context.always_max_fire = mode;
-    if (cheats_model_handle) {
-        cheats_model_handle.DirtyVariable("always_max_fire");
-    }
-}
-
-zelda64::GenericOnOffOption zelda64::get_always_have_remote_bombs() {
-    return cheats_context.always_have_remote_bombs;
-}
-
-void zelda64::set_always_have_remote_bombs(zelda64::GenericOnOffOption mode) {
-    cheats_context.always_have_remote_bombs = mode;
-    if (cheats_model_handle) {
-        cheats_model_handle.DirtyVariable("always_have_remote_bombs");
-    }
-}
-
-zelda64::GenericOnOffOption zelda64::get_always_have_red_bombs() {
-    return cheats_context.always_have_red_bombs;
-}
-
-void zelda64::set_always_have_red_bombs(zelda64::GenericOnOffOption mode) {
-    cheats_context.always_have_red_bombs = mode;
-    if (cheats_model_handle) {
-        cheats_model_handle.DirtyVariable("always_have_red_bombs");
-    }
-}
-
-zelda64::GenericOnOffOption zelda64::get_infinite_credits() {
-    return cheats_context.infinite_credits;
-}
-
-void zelda64::set_infinite_credits(zelda64::GenericOnOffOption mode) {
-    cheats_context.infinite_credits = mode;
-    if (cheats_model_handle) {
-        cheats_model_handle.DirtyVariable("infinite_credits");
-    }
-}
-
-zelda64::GenericOnOffOption zelda64::get_infinite_lives() {
-    return cheats_context.infinite_lives;
-}
-
-void zelda64::set_infinite_lives(zelda64::GenericOnOffOption mode) {
-    cheats_context.infinite_lives = mode;
-    if (cheats_model_handle) {
-        cheats_model_handle.DirtyVariable("infinite_lives");
-    }
+    auto old_stage = stick_calibration_session.stage();
+    int old_directions = stick_calibration_session.directions_recorded();
+    bool old_ready = stick_calibration_session.ready();
+    double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    stick_calibration_session.sample(x, y, now);
+    if (old_stage != stick_calibration_session.stage()
+        || old_directions != stick_calibration_session.directions_recorded()
+        || old_ready != stick_calibration_session.ready()) dirty_calibration_variables();
 }
 
 // Helper copied from RmlUi to get a named child.
@@ -616,7 +560,14 @@ Rml::Element* recompui::get_child_by_tag(Rml::Element* parent, const std::string
 class ConfigTabsetListener : public Rml::EventListener {
     void ProcessEvent(Rml::Event& event) override {
         if (event.GetId() == Rml::EventId::Tabchange) {
+            cancel_stick_calibration();
             int tab_index = event.GetParameter<int>("tab_index", 0);
+            // Refresh controller list when switching to controls tab
+            if (tab_index == recompui::config_tab_to_index(recompui::ConfigTab::Controls)) {
+                refresh_controller_list();
+                controls_model_handle.DirtyVariable("connected_controller_names");
+                controls_model_handle.DirtyVariable("port_controller_index");
+            }
             bool in_mod_tab = (tab_index == recompui::config_tab_to_index(recompui::ConfigTab::Mods));
             if (in_mod_tab) {
                 recompui::set_config_tabset_mod_nav();
@@ -688,15 +639,17 @@ public:
                 zelda64::open_quit_game_prompt();
             });
 
-        recompui::register_event(listener, "toggle_input_device",
+        recompui::register_event(listener, "port_controller_changed",
             [](const std::string& param, Rml::Event& event) {
-                cur_device = cur_device == recomp::InputDevice::Controller
-                    ? recomp::InputDevice::Keyboard
-                    : recomp::InputDevice::Controller;
-                controls_model_handle.DirtyVariable("input_device_is_keyboard");
-                controls_model_handle.DirtyVariable("inputs");
+                cancel_stick_calibration();
+                int value = event.GetParameter<int>("value", -1);
+                recomp::assign_controller_to_port(selected_port, value);
+                port_controller_index = value;
+                controls_model_handle.DirtyVariable("port_controller_index");
+                controls_model_handle.DirtyVariable("assigned_controller_name");
+                zelda64::save_config();
             });
-            
+
         recompui::register_event(listener, "area_index_changed",
             [](const std::string& param, Rml::Event& event) {
                 debug_context.area_index = event.GetParameter<int>("value", 0);
@@ -865,8 +818,10 @@ public:
             return Rml::Variant{recomp::get_input_enum_name(static_cast<recomp::GameInput>(inputs.at(0).Get<size_t>()))};
         });
 
+
         constructor.BindEventCallback("set_input_binding",
             [](Rml::DataModelHandle model_handle, Rml::Event& event, const Rml::VariantList& inputs) {
+                cancel_stick_calibration();
                 scanned_input_index = inputs.at(0).Get<size_t>();
                 scanned_binding_index = inputs.at(1).Get<size_t>();
                 recomp::start_scanning_input(cur_device);
@@ -876,11 +831,22 @@ public:
 
         constructor.BindEventCallback("reset_input_bindings_to_defaults",
             [](Rml::DataModelHandle model_handle, Rml::Event& event, const Rml::VariantList& inputs) {
-                if (cur_device == recomp::InputDevice::Controller) {
-                    zelda64::reset_cont_input_bindings();
-                } else {
-                    zelda64::reset_kb_input_bindings();
+                cancel_stick_calibration();
+                // Reset all ports: P1 = Keyboard, P2-P4 = Off
+                recomp::set_port_mode(0, recomp::ControllerPortMode::Keyboard);
+                for (int p = 1; p < recomp::max_ports; p++) {
+                    recomp::set_port_mode(p, recomp::ControllerPortMode::Off);
                 }
+                for (int p = 0; p < recomp::max_ports; p++) {
+                    recomp::set_stick_sensitivity(p, 100);
+                    recomp::set_stick_calibration(p, {});
+                }
+                zelda64::reset_input_bindings();
+                selected_port = 0;
+                cur_device = recomp::InputDevice::Keyboard;
+                port_mode_index = static_cast<int>(recomp::ControllerPortMode::Keyboard);
+                refresh_controller_list();
+                zelda64::save_config();
                 model_handle.DirtyAllVariables();
                 nav_help_model_handle.DirtyVariable("nav_help__accept");
                 nav_help_model_handle.DirtyVariable("nav_help__exit");
@@ -889,9 +855,10 @@ public:
 
         constructor.BindEventCallback("clear_input_bindings",
             [](Rml::DataModelHandle model_handle, Rml::Event& event, const Rml::VariantList& inputs) {
+                cancel_stick_calibration();
                 recomp::GameInput input = static_cast<recomp::GameInput>(inputs.at(0).Get<size_t>());
                 for (size_t binding_index = 0; binding_index < recomp::bindings_per_input; binding_index++) {
-                    recomp::set_input_binding(input, binding_index, cur_device, recomp::InputField{});
+                    recomp::set_input_binding(input, binding_index, cur_device, recomp::InputField{}, selected_port);
                 }
                 model_handle.DirtyVariable("inputs");
                 graphics_model_handle.DirtyVariable("gfx_help__apply");
@@ -899,11 +866,55 @@ public:
 
         constructor.BindEventCallback("reset_single_input_binding_to_default",
             [](Rml::DataModelHandle model_handle, Rml::Event& event, const Rml::VariantList& inputs) {
+                cancel_stick_calibration();
                 recomp::GameInput input = static_cast<recomp::GameInput>(inputs.at(0).Get<size_t>());
-                zelda64::reset_single_input_binding(cur_device, input);
+                zelda64::reset_single_input_binding(cur_device, input, selected_port);
                 model_handle.DirtyVariable("inputs");
                 nav_help_model_handle.DirtyVariable("nav_help__accept");
                 nav_help_model_handle.DirtyVariable("nav_help__exit");
+            });
+
+        constructor.BindEventCallback("select_port",
+            [](Rml::DataModelHandle model_handle, Rml::Event& event, const Rml::VariantList& inputs) {
+                cancel_stick_calibration();
+                selected_port = inputs.at(0).Get<int>();
+                recomp::ControllerPortMode mode = recomp::get_port_mode(selected_port);
+                port_mode_index = static_cast<int>(mode);
+                // Sync cur_device with the selected port's mode
+                if (mode == recomp::ControllerPortMode::Controller) {
+                    cur_device = recomp::InputDevice::Controller;
+                } else {
+                    cur_device = recomp::InputDevice::Keyboard;
+                }
+                refresh_controller_list();
+                model_handle.DirtyAllVariables();
+            });
+
+        constructor.BindEventCallback("set_port_mode",
+            [](Rml::DataModelHandle model_handle, Rml::Event& event, const Rml::VariantList& inputs) {
+                cancel_stick_calibration();
+                std::string mode_str = inputs.at(0).Get<std::string>();
+                recomp::ControllerPortMode mode = recomp::ControllerPortMode::Off;
+                if (mode_str == "Keyboard") mode = recomp::ControllerPortMode::Keyboard;
+                else if (mode_str == "Controller") mode = recomp::ControllerPortMode::Controller;
+                recomp::set_port_mode(selected_port, mode);
+                port_mode_index = static_cast<int>(mode);
+                // Sync cur_device with the new mode
+                if (mode == recomp::ControllerPortMode::Controller) {
+                    cur_device = recomp::InputDevice::Controller;
+                } else {
+                    cur_device = recomp::InputDevice::Keyboard;
+                }
+                // Auto-assign first available controller when switching to Controller mode
+                if (mode == recomp::ControllerPortMode::Controller && recomp::get_port_controller_index(selected_port) < 0) {
+                    auto names = recomp::get_connected_controller_names();
+                    if (!names.empty()) {
+                        recomp::assign_controller_to_port(selected_port, 0);
+                    }
+                }
+                refresh_controller_list();
+                model_handle.DirtyAllVariables();
+                zelda64::save_config();
             });
 
         constructor.BindEventCallback("set_input_row_focus",
@@ -937,7 +948,7 @@ public:
             virtual int Size(void* ptr) override { return recomp::bindings_per_input; }
             virtual Rml::DataVariable Child(void* ptr, const Rml::DataAddressEntry& address) override {
                 recomp::GameInput input = static_cast<recomp::GameInput>((uintptr_t)ptr);
-                return Rml::DataVariable{&input_field_definition_instance, &recomp::get_input_binding(input, address.index, cur_device)};
+                return Rml::DataVariable{&input_field_definition_instance, &recomp::get_input_binding(input, address.index, cur_device, selected_port)};
             }
         };
         // Static instance of the InputField array variable definition to have a fixed pointer to return to RmlUi.
@@ -1007,9 +1018,107 @@ public:
             }
         });
 
-        constructor.Bind<int>("active_binding_slot", &scanned_binding_index);
+        constructor.BindEventCallback("calibrate_stick",
+            [](Rml::DataModelHandle model_handle, Rml::Event&, const Rml::VariantList&) {
+                recomp::cancel_scanning_input();
+                float x, y;
+                int32_t controller_id;
+                if (!recomp::get_raw_controller_stick(selected_port, &x, &y, &controller_id)) {
+                    cancel_stick_calibration("Connect a controller and map its stick to Up, Down, Left, and Right before calibrating.");
+                    return;
+                }
+                calibration_port = selected_port;
+                calibration_controller_id = controller_id;
+                calibration_message.clear();
+                stick_calibration_session.begin();
+                dirty_calibration_variables();
+            });
+        constructor.BindEventCallback("save_stick_calibration",
+            [](Rml::DataModelHandle model_handle, Rml::Event&, const Rml::VariantList&) {
+                recompui::update_control_calibration();
+                recomp::StickCalibration calibration;
+                if (!stick_calibration_session.finish(calibration)) return;
+                recomp::set_stick_calibration(selected_port, calibration);
+                recomp::set_stick_sensitivity(selected_port, 100);
+                cancel_stick_calibration("Calibration saved for P" + std::to_string(selected_port + 1) + ". Sensitivity is now 100%; fine-tune it below if needed.");
+                controls_model_handle.DirtyVariable("stick_sensitivity");
+                zelda64::save_config();
+            });
+        constructor.BindEventCallback("cancel_stick_calibration",
+            [](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+                cancel_stick_calibration("Calibration canceled. Previous settings kept.");
+            });
+        constructor.BindEventCallback("reset_stick_calibration",
+            [](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+                recomp::set_stick_calibration(selected_port, {});
+                cancel_stick_calibration("Calibration cleared for this player.");
+                zelda64::save_config();
+            });
+        constructor.BindFunc("calibrating_stick", [](Rml::Variant& out) { out = stick_calibration_session.active(); });
+        constructor.BindFunc("calibration_ready", [](Rml::Variant& out) { out = stick_calibration_session.ready(); });
+        constructor.BindFunc("stick_calibrated", [](Rml::Variant& out) { out = recomp::get_stick_calibration(selected_port).enabled; });
+        constructor.BindFunc("calibration_status", [](Rml::Variant& out) {
+            if (stick_calibration_session.stage() == recomp::StickCalibrationSession::Stage::Center) {
+                out = "Step 1: Release the stick and leave it centered for one second.";
+            } else if (stick_calibration_session.active()) {
+                int directions = stick_calibration_session.directions_recorded();
+                out = directions == 8
+                    ? "All 8 directions recorded. Release the stick, then choose Save Calibration."
+                    : "Step 2: Push the stick fully to the edge and slowly circle it twice, including diagonals. Directions recorded: " + std::to_string(directions) + "/8.";
+            } else if (!calibration_message.empty()) {
+                out = calibration_message;
+            } else {
+                out = recomp::get_stick_calibration(selected_port).enabled
+                    ? "Calibrated for this player. Recalibrate after changing controllers."
+                    : "Calibrate to correct uneven stick range. Settings are saved separately for each player.";
+            }
+        });
 
+        constructor.Bind<int>("active_binding_slot", &scanned_binding_index);
+        constructor.Bind<int>("selected_port", &selected_port);
+        constructor.Bind<int>("port_mode_index", &port_mode_index);
+        constructor.Bind<int>("port_controller_index", &port_controller_index);
+        constructor.BindFunc("stick_sensitivity",
+            [](Rml::Variant& out) { out = recomp::get_stick_sensitivity(selected_port); },
+            [](const Rml::Variant& in) {
+                recomp::set_stick_sensitivity(selected_port, in.Get<int>());
+                controls_model_handle.DirtyVariable("stick_sensitivity");
+                zelda64::save_config();
+            });
+        constructor.RegisterArray<std::vector<std::string>>();
+        constructor.Bind("connected_controller_names", &connected_controller_names);
+
+        constructor.BindFunc("port_mode", [](Rml::Variant& out) {
+            recomp::ControllerPortMode mode = recomp::get_port_mode(selected_port);
+            switch (mode) {
+                case recomp::ControllerPortMode::Off: out = "Off"; break;
+                case recomp::ControllerPortMode::Keyboard: out = "Keyboard"; break;
+                case recomp::ControllerPortMode::Controller: out = "Controller"; break;
+                default: out = "Off"; break;
+            }
+        });
+
+        constructor.BindFunc("assigned_controller_name", [](Rml::Variant& out) {
+            out = recomp::get_port_controller_name(selected_port);
+        });
+
+        auto make_port_style = [](int port) -> std::string {
+            bool is_selected = (selected_port == port);
+            bool is_active = recomp::get_port_mode(port) != recomp::ControllerPortMode::Off;
+            if (is_selected) {
+                return "min-width: 48dp; opacity: 1.0;";
+            } else if (is_active) {
+                return "min-width: 48dp; opacity: 0.7;";
+            } else {
+                return "min-width: 48dp; opacity: 0.3;";
+            }
+        };
+        constructor.BindFunc("port_0_style", [make_port_style](Rml::Variant& out) { out = make_port_style(0); });
+        constructor.BindFunc("port_1_style", [make_port_style](Rml::Variant& out) { out = make_port_style(1); });
+        constructor.BindFunc("port_2_style", [make_port_style](Rml::Variant& out) { out = make_port_style(2); });
+        constructor.BindFunc("port_3_style", [make_port_style](Rml::Variant& out) { out = make_port_style(3); });
         controls_model_handle = constructor.GetModelHandle();
+        refresh_controller_list();
     }
 
     void make_nav_help_bindings(Rml::Context* context) {
@@ -1119,25 +1228,6 @@ public:
         debug_context.model_handle = constructor.GetModelHandle();
     }
 
-    void make_cheat_bindings(Rml::Context* context) {
-        Rml::DataModelConstructor constructor = context->CreateDataModel("cheats_model");
-        if (!constructor) {
-            throw std::runtime_error("Failed to make RmlUi data model for the cheats menu");
-        }
-
-        bind_config_list_events(constructor);
-
-        cheats_model_handle = constructor.GetModelHandle();
-
-        bind_option(constructor, "moonjump", &cheats_context.moonjump);
-        bind_option(constructor, "always_max_bomb", &cheats_context.always_max_bomb);
-        bind_option(constructor, "always_max_fire", &cheats_context.always_max_fire);
-        bind_option(constructor, "always_have_remote_bombs", &cheats_context.always_have_remote_bombs);
-        bind_option(constructor, "always_have_red_bombs", &cheats_context.always_have_red_bombs);
-        bind_option(constructor, "infinite_credits", &cheats_context.infinite_credits);
-        bind_option(constructor, "infinite_lives", &cheats_context.infinite_lives);
-    }
-
     void make_bindings(Rml::Context* context) override {
         // initially set cont state for ui help
         //recomp::config_menu_set_cont_or_kb(recompui::get_cont_active());
@@ -1147,7 +1237,6 @@ public:
         make_graphics_bindings(context);
         make_sound_options_bindings(context);
         make_debug_bindings(context);
-        make_cheat_bindings(context);
     }
 };
 
@@ -1225,28 +1314,3 @@ Rml::Element* recompui::get_mod_tab() {
 
     return tab_el;
 }
-
-/*
-moon jump
-infinite health
-always max bomb upgrades
-always max fire upgrades
-always have remote bombs
-always have red bombs
-infinite credits
-infinite lives
-
-// These defaults values don't matter, as the config file handling overrides them.
-struct ControlOptionsContext {
-    int rumble_strength; // 0 to 100
-    int gyro_sensitivity; // 0 to 100
-    int mouse_sensitivity; // 0 to 100
-    int joystick_deadzone; // 0 to 100
-    zelda64::TargetingMode targeting_mode;
-    recomp::BackgroundInputMode background_input_mode;
-    zelda64::FilmGrainMode film_grain_mode;
-    zelda64::RadioBoxMode radio_comm_box_mode;
-    zelda64::AimInvertMode invert_y_axis_mode;
-    zelda64::AimInvertMode analog_camera_invert_mode;
-};
-*/

@@ -33,7 +33,6 @@
 #include "zelda_sound.h"
 #include "zelda_render.h"
 #include "zelda_support.h"
-#include "zelda_cheats.h"
 #include "zelda_game.h"
 #include "recomp_data.h"
 #include "ovl_patches.hpp"
@@ -45,7 +44,6 @@
 #include "../../patches/input.h"
 #include "../../patches/sound.h"
 #include "../../patches/misc_funcs.h"
-#include "../../patches/cheats.h"
 
 // #include "mods/mm_recomp_dpad_builtin.h"
 
@@ -58,7 +56,7 @@
 
 #include "../../lib/rt64/src/contrib/stb/stb_image.h"
 
-const std::string version_string = "1.0.0";
+const std::string version_string = "0.9.1";
 
 template<typename... Ts>
 void exit_error(const char* str, Ts ...args) {
@@ -616,13 +614,6 @@ int main(int argc, char** argv) {
     REGISTER_FUNC(recomp_get_mouse_deltas);
     REGISTER_FUNC(recomp_get_inverted_axes);
     REGISTER_FUNC(recomp_get_analog_inverted_axes);
-    REGISTER_FUNC(recomp_get_moonjump);
-    REGISTER_FUNC(recomp_get_always_max_bomb);
-    REGISTER_FUNC(recomp_get_always_max_fire);
-    REGISTER_FUNC(recomp_get_always_have_remote_bombs);
-    REGISTER_FUNC(recomp_get_always_have_red_bombs);
-    REGISTER_FUNC(recomp_get_infinite_credits);
-    REGISTER_FUNC(recomp_get_infinite_lives);
     recompui::register_ui_exports();
     recomputil::register_data_api_exports();
 

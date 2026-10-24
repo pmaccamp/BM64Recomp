@@ -1,10 +1,8 @@
 #include "patches.h"
 #include "misc_funcs.h"
-#include "sound.h"
 #include "PR/os_pi.h"
 #include "PR/sched.h"
 #include "ultra_extensions.h"
-#include "cheats.h"
 
 #define ENABLE_WIDESCREEN_ASPECT_CHANGES
 
@@ -134,113 +132,6 @@ RECOMP_PATCH void set_zero_vaddr_tlb(void) {
     // Not used.
     //osMapTLB(0, 0, NULL, (u32) (((u32) (&D_80042000)) - 0x80000000), -1, -1);
     gSecureCallArr[0] = 0x80019f80; // this feels dirty hardcoding it, but whatever.
-}
-
-static s16 scale_volume_s16(s16 volume, float scale) {
-    return (s16)((f32)volume * scale);
-}
-
-enum {
-    VOICE_GAIN_SHIFT = 6,
-    CHANNEL_GAIN_SHIFT = 14,
-    FINAL_GAIN_SHIFT = 15,
-};
-
-RECOMP_PATCH void alSeqpSetVol(ALSeqPlayer* seqp, s16 vol) {
-    ALEvent evt;
-
-    evt.type = AL_SEQP_VOL_EVT;
-    evt.msg.spvol.vol = vol;
-    alEvtqPostEvent(&seqp->evtq, &evt, 0);
-}
-
-typedef enum {
-    AL_SNDP_PLAY_EVT,
-    AL_SNDP_STOP_EVT,
-    AL_SNDP_PAN_EVT,
-    AL_SNDP_VOL_EVT,
-    AL_SNDP_PITCH_EVT,
-    AL_SNDP_API_EVT,
-    AL_SNDP_DECAY_EVT,
-    AL_SNDP_END_EVT,
-    AL_SNDP_FX_EVT
-} ALSndpMsgType;
-
-typedef struct {
-    ALVoice     voice;     
-    ALSound     *sound;         /* sound referenced here */
-    s16         priority;
-    f32         pitch;          /* current playback pitch                    */
-    s32         state;          /* play state for this sound                 */
-    s16         vol;            /* volume - combined with volume from bank   */
-    ALPan       pan;            /* pan - 0 = left, 127 = right               */
-    u8          fxMix;          /* wet/dry mix - 0 = dry, 127 = wet          */
-} ALSoundState;
-
-typedef union {
-
-    ALEvent             msg;
-
-    struct {
-        s16             type;
-        ALSoundState    *state;
-    } common;
-    
-    struct {
-        s16             type;
-        ALSoundState    *state;
-        s16             vol;
-    } vol;
-    
-    struct {
-        s16             type;
-        ALSoundState    *state;
-        f32             pitch;
-    } pitch;
-    
-    struct {
-        s16             type;
-        ALSoundState    *state;
-        ALPan           pan;
-    } pan;
-    
-    struct {
-        s16             type;
-        ALSoundState    *state;
-        u8              mix;
-    } fx;
-    
-} ALSndpEvent;
-
-RECOMP_PATCH void alSndpSetVol(ALSndPlayer *sndp, s16 vol) {
-    ALSndpEvent evt;
-    ALSoundState  *sState = sndp->sndState;
-
-    evt.vol.type = AL_SNDP_VOL_EVT;
-    evt.vol.state = &sState[sndp->target];
-    evt.vol.vol = scale_volume_s16(vol, recomp_get_sfx_volume());
-    alEvtqPostEvent(&sndp->evtq, (ALEvent *)&evt, 0);
-}
-
-RECOMP_PATCH s16 __vsVol(ALVoiceState* vs, ALSeqPlayer* seqp) {
-    const ALChanState* chan_state;
-    u32 note_gain;
-    u32 channel_gain;
-    s16 native_voice_volume;
-
-    chan_state = &seqp->chanState[(u32)vs->channel];
-
-    // Voice-local gain (tremolo, note velocity, envelope).
-    note_gain = (u32)vs->tremelo * (u32)vs->velocity;
-    note_gain = (note_gain * (u32)vs->envGain) >> VOICE_GAIN_SHIFT;
-
-    // Channel/sample gain and sequence master volume.
-    channel_gain = (u32)chan_state->vol * (u32)vs->sound->sampleVolume;
-    channel_gain = (channel_gain * (u32)seqp->vol) >> CHANNEL_GAIN_SHIFT;
-
-    // Original libaudio fixed-point normalization.
-    native_voice_volume = (s16)((note_gain * channel_gain) >> FINAL_GAIN_SHIFT);
-    return scale_volume_s16(native_voice_volume, recomp_get_bgm_volume());
 }
 
 s32 func_8022979C(void*, s32, s32);                       /* extern */
@@ -629,7 +520,12 @@ RECOMP_PATCH Gfx *Gfx_InitGfx(void) {
     gSPDisplayList(gMasterDisplayList++, D_8029F6D8);
     gDPSetDepthImage(gMasterDisplayList++, D_200000);
     gDPPipeSync(gMasterDisplayList++);
-    gDPSetScissor(gMasterDisplayList++, G_SC_NON_INTERLACE, 0, 0, 320, 240);
+    gEXSetScissor(gMasterDisplayList++, 0, G_EX_ORIGIN_LEFT, G_EX_ORIGIN_RIGHT, 0, 0, 0, 240);
+    //gEXSetRectAlign(gMasterDisplayList++, G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE,
+        //0, 0,
+        //0, 0);
+    //gEXSetViewportAlign(gMasterDisplayList++, G_EX_ORIGIN_NONE, 0, 0);
+    //gDPSetScissor(gMasterDisplayList++, G_SC_NON_INTERLACE, 0, 0, 320, 240);
     Gfx_DrawBackdrop(&gMasterDisplayList);
     gSPSetGeometryMode(gMasterDisplayList++, G_ZBUFFER | G_CULL_BACK | G_LIGHTING);
     gDPSetRenderMode(gMasterDisplayList++, G_RM_AA_ZB_TEX_EDGE, G_RM_AA_ZB_TEX_EDGE2);
@@ -745,7 +641,7 @@ RECOMP_PATCH void func_8022787C(Gfx** mainGfx) {
             Libc_Memcpy((uintptr_t)gGfxWorkPtr + (D_802A5368 * sizeof(Mtx)), (uintptr_t)&buffer->unk_18, sizeof(Mtx));
             gSPMatrix(gfx++, (uintptr_t)gGfxWorkPtr + (D_802A5368 * sizeof(Mtx)), G_MTX_NOPUSH | G_MTX_MUL | G_MTX_PROJECTION);
             D_802A5368++;
-            gDPSetScissor(gfx++, G_SC_NON_INTERLACE, buffer->ulx, buffer->uly, buffer->lrx, buffer->lry);
+            gEXSetScissor(gfx++, G_SC_NON_INTERLACE, G_EX_ORIGIN_LEFT, G_EX_ORIGIN_NONE, buffer->ulx, buffer->uly, buffer->lrx, buffer->lry);
             gSPDisplayList(gfx++, Gfx_GetSubDLPtr(buffer->unk14));
         }
     }
@@ -804,177 +700,6 @@ RECOMP_PATCH void func_80227D50(FBInfo* fb, u32 ulx, u32 uly, u32 width, u32 hei
 extern void (*D_802B36AC)(void *); // __free_hook
 void free_hook(void *);
 
-enum GenericOffOnOption {
-    ON,
-    OFF,
-};
-
-extern u32 D_80027060[];
-
-static OSContPad tempPad;
-
-typedef struct LevelClass
-{
-	int num;						// 0x00
-	int type;						// 0x04
-	int propertiesFlag;             // 0x08
-	int u2;							// 0x0C
-	int flag;						// 0x10
-	int u4;							// 0x14
-	int u5;							// 0x18
-	int u6;							// 0x1C
-	int u7;							// 0x20
-	int u8;							// 0x24
-	int objectID;					// 0x28 - Check ObjectVars.h for a list of object IDs
-	int u10;						// 0x2C
-	int u11;						// 0x30
-	float radius;					// 0x34
-	float unk_float;				// 0x38
-	int u12;						// 0x3C
-	void *ObjectPointer;			// 0x40 - Pointer to the Object this LevelClass is spawning
-	struct LevelClass *CollisionPointer; 	// 0x44 - Pointer to the collision LevelClass
-	int u13;						// 0x48
-	float unk_vector[3];			// 0x4C - 0x54
-	int u14[4];						// 0x58 - 0x64
-	float unk_float1;				// 0x68
-	float yVel;       				// 0x6C
-	float unk_float3;				// 0x70
-	float unk_float4;				// 0x74
-	long unk_pointer2;				// 0x78
-	long unk_pointer3;				// 0x7C
-} LevelClass;
-
-typedef struct Player {
-	float spawnLocation[3];
-	float directionAngle;
-	int flag;
-	int heartCount;
-	short u1;
-	short bombType;
-	int bombCount;
-	int bombExplosionLevel;
-	int controlType;              // 0 = None, 1 = Player, 2 = AI, 3 = Dead (No Input)
-	LevelClass *PlayerLevelClass; // Pointer to the LevelClass this Player is controlling
-	LevelClass *HeldLevelClass;   // Pointer to the LevelClass of the held object
-	LevelClass *OtherClass;
-	int u8;
-	int u9;
-	int u10;
-	int u11;
-	int animationType;
-	int collisionEnabled;
-	int u13;
-	int u14;
-	int u15;
-	float directionAngle2[4];
-	short u12;
-	char timerA_Enabled; // virusType has to be set for this to work
-	char virusType;
-	float virusFloat1;
-	float virusFloat2;
-	int timer2;
-	int virusTimer;
-	int u16[5];
-	int timerA;
-	short unkType;
-	short unkType1;
-	int unkType2;
-	int u17[5];
-	LevelClass *ComputationLevelClass;
-	int u20[3];
-	float unknownFloat1;
-	int u21;
-} Player;
-
-extern Player g_Players[8]; //0x800AEDF0
-extern u32 D_802AC624; // lives
-extern u32 D_802AC628; // credits
-
-RECOMP_EXPORT void Recomp_ProcessCheats() {
-    osContGetReadData(&tempPad);
-
-    /* Moonjump (Hold L to Moonjump) */
-    switch (recomp_get_moonjump()) {
-        default:
-        case (enum GenericOffOnOption)OFF:
-            break;
-        case (enum GenericOffOnOption)ON:
-            // is the player holding L?
-            if (tempPad.button & 0x2000) {
-                if (g_Players[0].PlayerLevelClass) {
-                    g_Players[0].PlayerLevelClass->yVel = -32.0f;
-                }
-            }
-            break;
-    }
-
-#define MAX_BOMB_COUNT_UPGRADE 0xFF
-#define MAX_BOMB_FIRE_UPGRADE  0xFF
-
-    /* Always Max Bomb Count */
-    switch (recomp_get_always_max_bomb()) {
-        default:
-        case (enum GenericOffOnOption)OFF:
-            break;
-        case (enum GenericOffOnOption)ON:
-            g_Players[0].bombCount = MAX_BOMB_COUNT_UPGRADE;
-            break;
-    }
-
-    /* Always Max Fire Count */
-    switch (recomp_get_always_max_fire()) {
-        default:
-        case (enum GenericOffOnOption)OFF:
-            break;
-        case (enum GenericOffOnOption)ON:
-            g_Players[0].bombExplosionLevel = MAX_BOMB_FIRE_UPGRADE;
-            break;
-    }
-
-#define HAVE_RED_BOMBS    (1 << 0) // 1
-#define HAVE_REMOTE_BOMBS (1 << 1) // 2
-
-    /* Always Have Remote Bombs */
-    switch (recomp_get_always_have_remote_bombs()) {
-        default:
-        case (enum GenericOffOnOption)OFF:
-            break;
-        case (enum GenericOffOnOption)ON:
-            g_Players[0].bombType |= HAVE_REMOTE_BOMBS;
-            break;
-    }
-
-    /* Always Have Red Bombs */
-    switch (recomp_get_always_have_red_bombs()) {
-        default:
-        case (enum GenericOffOnOption)OFF:
-            break;
-        case (enum GenericOffOnOption)ON:
-            g_Players[0].bombType |= HAVE_RED_BOMBS;
-            break;
-    }
-
-    /* Infinite Credits */
-    switch (recomp_get_infinite_credits()) {
-        default:
-        case (enum GenericOffOnOption)OFF:
-            break;
-        case (enum GenericOffOnOption)ON:
-            D_802AC628 = 99;
-            break;
-    }
-
-    /* Infinite Lives */
-    switch (recomp_get_infinite_lives()) {
-        default:
-        case (enum GenericOffOnOption)OFF:
-            break;
-        case (enum GenericOffOnOption)ON:
-            D_802AC624 = 99;
-            break;
-    }
-}
-
 RECOMP_PATCH void func_80225840(void *arg0) {
     void *temp_s0; 
     Gfx *mainGfx;
@@ -1023,7 +748,6 @@ RECOMP_PATCH void func_80225840(void *arg0) {
     D_802B36AC = free_hook;
 
     while (TRUE) {
-        Recomp_ProcessCheats();
         func_8023A104();           // receive message from the cont mesg queue and run osContGetReadData
         mainGfx = Gfx_InitGfx();   // init gfx
         ThreadProc_RunQueuedThreads();           // get thread pri/start some kind of thread.
@@ -1500,15 +1224,8 @@ int gfxCheckStretch(u32 *ptr, u32 var) {
     } else if (gTrackedSkyboxes[1].tracking && (gTrackedSkyboxes[1].ptr == (u8*)ptr)) {
         return 1;
     } else if (gSpecialLoadedBG.tracking && gSpecialLoadedBG.ptr == (u8*)ptr) {
-        // custom bomberman BG?
-        if (gSpecialLoadedBG.fileID == CUSTOM_BOMBERMAN_MENU_FILE_ID) {
-            // dont stretch anything but the BG
-            if (var == 0x00002400) {
-                return 0;
-            }
-        }
         // is the currently loaded special file the world select graphics?
-        if (gSpecialLoadedBG.fileID == WORLD_SELECT_BG_FILE_ID) {
+        if (gSpecialLoadedBG.fileID == 55) {
             // are we trying to stretch the world select GFX? dont.
             if (var == 0x00000C00) {
                 return 0;
@@ -1851,7 +1568,6 @@ extern s32 D_802A0764[];
 extern s32 D_802A076C[];
 extern s32 D_802A079C;
 
-// draw HUD
 RECOMP_PATCH void func_80242270(s32 arg0, Gfx** gfxP) {
     s32 i;
     s32 j;
@@ -1891,8 +1607,7 @@ RECOMP_PATCH void func_80242270(s32 arg0, Gfx** gfxP) {
         digits /= 10;
     }
 
-    gfx = *gfxP;    
-
+    gfx = *gfxP;
     gDPSetRenderMode(gfx++, G_RM_AA_TEX_EDGE, G_RM_AA_TEX_EDGE2);
     gDPSetCombineMode(gfx++, G_CC_DECALRGBA, G_CC_DECALRGBA);
     gSPTexture(gfx++, 0x8000, 0x8000, 0, G_TX_RENDERTILE, G_ON);
@@ -1904,24 +1619,7 @@ RECOMP_PATCH void func_80242270(s32 arg0, Gfx** gfxP) {
         struct UnkStruct802A0758* var_t5 = D_802A0758;
         gDPLoadTLUT_pal256(gfx++, var_t5->unk20[D_802A0774[i].unk0][0] + (u32)var_t5);
         gDPLoadTextureBlock_4b(gfx++, var_t5->unk14[D_802A0774[i].unk0][0] + (u32)var_t5, G_IM_FMT_CI, 16, 16, 0, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
-
-        if (i == 0) {
-            // clock
-            gEXPushScissor(gfx++);
-            gEXSetScissor(gfx++, G_SC_NON_INTERLACE, G_EX_ORIGIN_LEFT, G_EX_ORIGIN_RIGHT, 0, 0, 0, 240);
-            gEXSetRectAlign(gfx++, G_EX_ORIGIN_LEFT, G_EX_ORIGIN_LEFT, 0, 0, 0, 0);
-            gSPTextureRectangle(gfx++, D_802A0774[i].unk4, D_802A0774[i].unk8, D_802A0774[i].unkC, D_802A0774[i].unk10, 0, 0, 0, 0x0400, 0x0400);
-            gEXSetRectAlign(gfx++, G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, 0, 0, 0, 0);
-            gEXPopScissor(gfx++);
-        } else {
-            // gem
-            gEXPushScissor(gfx++);
-            gEXSetScissor(gfx++, G_SC_NON_INTERLACE, G_EX_ORIGIN_LEFT, G_EX_ORIGIN_RIGHT, 0, 0, 0, 240);
-            gEXSetRectAlign(gfx++, G_EX_ORIGIN_RIGHT, G_EX_ORIGIN_RIGHT, -(320) * 4, 0, -(320) * 4, 0);
-            gSPTextureRectangle(gfx++, D_802A0774[i].unk4, D_802A0774[i].unk8, D_802A0774[i].unkC, D_802A0774[i].unk10, 0, 0, 0, 0x0400, 0x0400);
-            gEXSetRectAlign(gfx++, G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, 0, 0, 0, 0);
-            gEXPopScissor(gfx++);
-        }        
+        gEXTextureRectangle(gfx++, G_EX_ORIGIN_LEFT, G_EX_ORIGIN_NONE, D_802A0774[i].unk4 - 0x80, D_802A0774[i].unk8, D_802A0774[i].unkC - 0x80, D_802A0774[i].unk10, 0, 0, 0, 0x0400, 0x0400);
     }
 
     var_s5 = 0;
@@ -1930,7 +1628,6 @@ RECOMP_PATCH void func_80242270(s32 arg0, Gfx** gfxP) {
     // draw both digit counters
     for(i = 0; i != 2; i++) {
         var_t3 = D_802A0764[i];
-
         for (j = 0; j < D_802A076C[i]; j++) {
             var_t2 = (struct UnkStruct802A075C_InnerC*)(&temp_t5->unkC);
             if ((i == 0) && (D_802AC610.unk28 < D_802AC610.unk30)) {
@@ -1939,30 +1636,11 @@ RECOMP_PATCH void func_80242270(s32 arg0, Gfx** gfxP) {
                 gDPLoadTLUT_pal16(gfx++, 0, var_t2->unk14 + (u32)temp_t5);
             }
             gDPLoadTextureTile_4b(gfx++, var_t2->unk0[D_802AC770[var_s5++]][2] + (u32)temp_t5, G_IM_FMT_CI, 10, 18, 0, 0, 9, 17, 0, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
-
-            if (i == 0) {
-                // clock
-                gEXPushScissor(gfx++);
-                gEXSetScissor(gfx++, G_SC_NON_INTERLACE, G_EX_ORIGIN_LEFT, G_EX_ORIGIN_RIGHT, 0, 0, 0, 240);
-                gEXSetRectAlign(gfx++, G_EX_ORIGIN_LEFT, G_EX_ORIGIN_LEFT, 0, 0, 0, 0);
-                gSPTextureRectangle(gfx++, var_t3 << 2, 22 << 2, (var_t3 + 10) << 2, (22 + 18) << 2, 0, 0, 0, 0x0400, 0x0400);
-                gEXSetRectAlign(gfx++, G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, 0, 0, 0, 0);
-                gEXPopScissor(gfx++);
-            } else {
-                // gem
-                gEXPushScissor(gfx++);
-                gEXSetScissor(gfx++, G_SC_NON_INTERLACE, G_EX_ORIGIN_LEFT, G_EX_ORIGIN_RIGHT, 0, 0, 0, 240);
-                gEXSetRectAlign(gfx++, G_EX_ORIGIN_RIGHT, G_EX_ORIGIN_RIGHT, -(320) * 4, 0, -(320) * 4, 0);
-                gSPTextureRectangle(gfx++, var_t3 << 2, 22 << 2, (var_t3 + 10) << 2, (22 + 18) << 2, 0, 0, 0, 0x0400, 0x0400);
-                gEXSetRectAlign(gfx++, G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, 0, 0, 0, 0);
-                gEXPopScissor(gfx++);
-            }
-            
+            gEXTextureRectangle(gfx++, G_EX_ORIGIN_LEFT, G_EX_ORIGIN_NONE, var_t3 << 2, 22 << 2, (var_t3 + 10) << 2, (22 + 18) << 2, 0, 0, 0, 0x0400, 0x0400);
             var_t3 += 10;
         }
     }
     gDPSetTexturePersp(gfx++, G_TP_PERSP);
     gDPSetTextureLUT(gfx++, G_TT_NONE);
-
     *gfxP = gfx;
 }

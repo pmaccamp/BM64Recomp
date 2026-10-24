@@ -111,60 +111,6 @@ jobs:
         with:
           name: BM64Recompiled-AppImage-X64-${{ matrix.type }}
           path: BM64Recompiled-*.AppImage
-  build-linux-flatpak:
-    runs-on: ubuntu-latest
-    env:
-      FLATPAK_ID: io.github.bm64recomp.bm64recomp
-      FREEDESKTOP_VERSION: 23.08
-      LLVM_VERSION: 18
-    strategy:
-      matrix:
-        type: [ Debug, Release ]
-        os: [ ubuntu-latest ]
-    name: ${{ matrix.os }} (x64, ${{ matrix.type }}, Flatpak)
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.ref }}
-          submodules: recursive
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: ${{ matrix.os }}-z64re-ccache-${{ matrix.type }}-x64-${{ inputs.N64RECOMP_COMMIT }}
-      - name: Install Linux Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y flatpak-builder ccache lld
-
-      - name: Get extra dependencies
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ secrets.BM64_REPO_WITH_PAT }}
-          token: ${{ secrets.BM64_RECOMP }}
-          path: bm64-secret
-      - name: Prepare Build
-        run: cp -r bm64-secret/bm64.decomp.us.z64 ./
-
-      - name: Prepare Flatpak
-        run: |
-          flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          flatpak --user install -y flathub org.freedesktop.Sdk//${{ env.FREEDESKTOP_VERSION }}
-          flatpak --user install -y flathub org.freedesktop.Sdk.Extension.llvm${{ env.LLVM_VERSION }}//${{ env.FREEDESKTOP_VERSION }}
-
-      - name: Build BM64Recomp
-        run: |-
-          export CCACHE_DIR=/tmp/ccache
-          git config --global protocol.file.allow always
-          make -C patches CC=clang LD=ld.lld
-          flatpak-builder --user --force-clean --install-deps-from=flathub --repo=repo --ccache builddir ./flatpak/${{ env.FLATPAK_ID }}.json
-          flatpak build-bundle repo ./${{ env.FLATPAK_ID }}.flatpak ${{ env.FLATPAK_ID }} --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: BM64Recompiled-Flatpak-X64-${{ matrix.type }}
-          path: ./${{ env.FLATPAK_ID }}.flatpak
   build-linux-arm64:
     runs-on: ubuntu-22.04-arm
     strategy:

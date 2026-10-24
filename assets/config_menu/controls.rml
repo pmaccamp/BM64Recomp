@@ -3,32 +3,115 @@
     </head>
     <body>
         <form class="config__form" data-attr-cur-input="cur_input_row" data-attr-cur-binding-slot="active_binding_slot">
-            <div class="config__header">
-                <div class="config__header-left">
-                    <button
-                        class="toggle"
-                        id="cont_kb_toggle"
-                        data-class-toggle--checked="input_device_is_keyboard"
-                        onclick="toggle_input_device"
-                        style="nav-down: #input_row_button_0_0; nav-up: #tab_controls"
-                    >
-                        <div class="toggle__border" />
-                        <div class="toggle__floater" />
-                        <div class="toggle__icons">
-                            <div class="toggle__icon toggle__icon--left"><div>␼</div></div>
-                            <div class="toggle__icon toggle__icon--right"><div>␽</div></div>
-                        </div>
+            <!-- Port selector -->
+            <div class="config__header" style="justify-content: center; gap: 8dp; margin-bottom: 4dp;">
+                <button
+                    class="button"
+                    data-class-button--success="selected_port == 0"
+                    data-event-click="select_port(0)"
+                    data-attr-style="port_0_style"
+                >
+                    <div class="button__label">P1</div>
+                </button>
+                <button
+                    class="button"
+                    data-class-button--success="selected_port == 1"
+                    data-event-click="select_port(1)"
+                    data-attr-style="port_1_style"
+                >
+                    <div class="button__label">P2</div>
+                </button>
+                <button
+                    class="button"
+                    data-class-button--success="selected_port == 2"
+                    data-event-click="select_port(2)"
+                    data-attr-style="port_2_style"
+                >
+                    <div class="button__label">P3</div>
+                </button>
+                <button
+                    class="button"
+                    data-class-button--success="selected_port == 3"
+                    data-event-click="select_port(3)"
+                    data-attr-style="port_3_style"
+                >
+                    <div class="button__label">P4</div>
+                </button>
+            </div>
+            <!-- Port mode selector -->
+            <div class="config__header" style="justify-content: center; gap: 8dp; margin-bottom: 4dp; align-items: center;">
+                <button
+                    class="button"
+                    data-class-button--error="port_mode == 'Off'"
+                    data-event-click="set_port_mode('Off')"
+                    data-attr-style="port_mode == 'Off' ? 'min-width: 64dp; opacity: 1.0;' : 'min-width: 64dp; opacity: 0.5;'"
+                >
+                    <div class="button__label">Off</div>
+                </button>
+                <button
+                    class="button"
+                    data-class-button--success="port_mode == 'Keyboard'"
+                    data-event-click="set_port_mode('Keyboard')"
+                    data-attr-style="port_mode == 'Keyboard' ? 'min-width: 80dp; opacity: 1.0;' : 'min-width: 80dp; opacity: 0.5;'"
+                >
+                    <div class="button__label">Keyboard</div>
+                </button>
+                <button
+                    class="button"
+                    data-class-button--success="port_mode == 'Controller'"
+                    data-event-click="set_port_mode('Controller')"
+                    data-attr-style="port_mode == 'Controller' ? 'min-width: 80dp; opacity: 1.0;' : 'min-width: 80dp; opacity: 0.5;'"
+                >
+                    <div class="button__label">Controller</div>
+                </button>
+                <select
+                    class="config-option-dropdown__select"
+                    id="port_controller_select"
+                    data-value="port_controller_index"
+                    onchange="port_controller_changed"
+                    style="min-width: 300dp; margin-left: 8dp; flex: 0 1 auto; height: auto; padding: 23dp;"
+                >
+                    <option data-for="name, i : connected_controller_names" data-attr-value="i">{{name}}</option>
+                </select>
+                <button
+                    class="button button--warning"
+                    style="nav-down:#input_row_button_0_0; margin-left: 8dp;"
+                    data-event-click="reset_input_bindings_to_defaults"
+                >
+                    <div class="button__label">Reset to defaults</div>
+                </button>
+            </div>
+            <div data-if="port_mode == 'Controller'" style="flex: 0 0 auto; margin: 0dp 24dp 12dp;">
+                <div style="display: flex; align-items: center; gap: 12dp; margin-bottom: 8dp;">
+                    <button id="calibrate_stick_button" class="button" data-if="!calibrating_stick" data-event-click="calibrate_stick">
+                        <div class="button__label">Calibrate Stick</div>
+                    </button>
+                    <button id="reset_stick_calibration_button" class="button button--warning" data-if="!calibrating_stick &amp;&amp; stick_calibrated" data-event-click="reset_stick_calibration">
+                        <div class="button__label">Reset Calibration</div>
+                    </button>
+                    <button id="save_stick_calibration_button" class="button button--success" data-if="calibrating_stick" data-attrif-disabled="!calibration_ready" data-event-click="save_stick_calibration">
+                        <div class="button__label">Save Calibration</div>
+                    </button>
+                    <button id="cancel_stick_calibration_button" class="button" data-if="calibrating_stick" data-event-click="cancel_stick_calibration">
+                        <div class="button__label">Cancel</div>
                     </button>
                 </div>
-                <div>
-                    <button
-                        class="button button--warning"
-                        style="nav-down:#input_row_button_0_0"
-                        data-event-click="reset_input_bindings_to_defaults"
-                    >
-                        <div class="button__label">Reset to defaults</div>
-                    </button>
+                <p style="font-size: 18dp; margin: 4dp 0dp 8dp;">{{calibration_status}}</p>
+                <div class="config-option__range-wrapper" style="display: flex; align-items: center; max-width: none; gap: 16dp;">
+                    <label for="stick_sensitivity_input" style="white-space: nowrap;">Stick Sensitivity</label>
+                    <label class="config-option__range-label">{{stick_sensitivity}}%</label>
+                    <input
+                        id="stick_sensitivity_input"
+                        type="range"
+                        min="100"
+                        max="200"
+                        step="5"
+                        style="flex: 1; margin: 0dp;"
+                        data-value="stick_sensitivity"
+                        data-attrif-disabled="calibrating_stick"
+                    />
                 </div>
+                <p style="font-size: 16dp; margin: 4dp 0dp 0dp;">Manual adjustment: increase if a fully tilted stick cannot reach full running speed. Default: 100%.</p>
             </div>
             <div class="config__wrapper input-config">
                 <div class="input-config__horizontal-split">
@@ -55,7 +138,7 @@
                                             data-event-click="set_input_binding(i,j)"
                                             class="prompt-font control-option__binding"
                                             data-attr-bind-slot="j"
-                                            data-attr-style="i == 0 ? 'nav-up:#cont_kb_toggle' : 'nav-up:auto'"
+                                            data-attr-style="i == 0 ? 'nav-up:#tab_controls' : 'nav-up:auto'"
                                         >
                                             <div class="control-option__binding-recording">
                                                 <div class="control-option__binding-circle" />
@@ -72,7 +155,7 @@
                                         data-event-focus="set_input_row_focus(i)"
                                         data-event-click="clear_input_bindings(i)"
                                         class="icon-button icon-button--error"
-                                        data-attr-style="i == 0 ? 'nav-up:#cont_kb_toggle' : 'nav-up:auto'"
+                                        data-attr-style="i == 0 ? 'nav-up:#tab_controls' : 'nav-up:auto'"
                                     >
                                         <svg src="icons/Trash.svg" />
                                     </button>
@@ -82,7 +165,7 @@
                                         data-event-focus="set_input_row_focus(i)"
                                         data-event-click="reset_single_input_binding_to_default(i)"
                                         class="icon-button icon-button--error"
-                                        data-attr-style="i == 0 ? 'nav-up:#cont_kb_toggle' : 'nav-up:auto'"
+                                        data-attr-style="i == 0 ? 'nav-up:#tab_controls' : 'nav-up:auto'"
                                     >
                                         <svg src="icons/Reset.svg" />
                                     </button>

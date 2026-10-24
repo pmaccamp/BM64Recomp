@@ -6,21 +6,59 @@
 # Input elf and rom files
 *.elf
 *.z64
+*.n64
+*.v64
 *.map
+/roms/
 
 # Output C files
 RecompiledFuncs/
 RecompiledPatches/
 
-# Linux build output
+# CMake build trees (including the documented and CI build directories)
 build/
+build-*/
+cmake-build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+compile_commands.json
+build.ninja
+rules.ninja
+.ninja_deps
+.ninja_log
+_deps/
+
+# Local build output, downloaded toolchains, and ROM preparation assets
+# Includes out/build, out/downloads, out/tools, and out/bm64-decomp.
+out/
+
+# Linux/macOS build output
 *.o
+*.a
+*.so
+*.so.*
+*.dylib
+/BM64Recompiled
+/BM64Recompiled.app/
+/BM64Recompiled.tar.gz
+/BM64Recompiled.zip
 
 # Windows build output
 *.exe
 *.dll
 *.lib
 *.pdb
+*.obj
+*.ilk
+*.exp
+*.res
+*.pch
+*.idb
+*.ipch
 
 # Data dumps
 data_dump.toml
@@ -51,7 +89,6 @@ bld/
 [Oo]bj/
 [Ll]og/
 [Ll]ogs/
-out/
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/

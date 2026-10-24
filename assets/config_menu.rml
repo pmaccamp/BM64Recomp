@@ -27,7 +27,6 @@
 	<link type="text/template" href="config_menu/controls.rml" />
 	<link type="text/template" href="config_menu/graphics.rml" />
 	<link type="text/template" href="config_menu/sound.rml" />
-	<link type="text/template" href="config_menu/cheats.rml" />
 	<link type="text/template" href="config_menu/mods.rml" />
 	<link type="text/template" href="config_menu/debug.rml" />
 </head>
@@ -64,13 +63,6 @@
 						</tab>
 						<panel class="config" data-model="sound_options_model">
 							<template src="config-menu__sound" />
-						</panel>
-						<tab class="tab" id="tab_cheats">
-							<div>Cheats</div>
-							<div class="tab__indicator"></div>
-						</tab>
-						<panel class="config" data-model="cheats_model">
-							<template src="config-menu__cheats" />
 						</panel>
 						<tab class="tab" id="tab_mods">
 							<div>Mods</div>

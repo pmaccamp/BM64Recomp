@@ -4,9 +4,6 @@
   
   <name>Bomberman 64: Recompiled</name>
   <summary>Static recompilation of Bomberman 64 for PC.</summary>
-
-  <metadata_license>CC0-1.0</metadata_license>
-  <project_license>GPL-3.0+</project_license>
   
   <supports>
     <control>pointing</control>

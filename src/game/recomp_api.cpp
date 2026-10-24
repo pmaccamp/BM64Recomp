@@ -7,7 +7,6 @@
 #include "recomp_ui.h"
 #include "zelda_render.h"
 #include "zelda_sound.h"
-#include "zelda_cheats.h"
 #include "librecomp/helpers.hpp"
 // #include "../patches/input.h"
 // #include "../patches/graphics.h"
@@ -165,34 +164,6 @@ extern "C" void recomp_time_us(uint8_t* rdram, recomp_context* ctx) {
 
 extern "C" void recomp_get_film_grain_enabled(uint8_t* rdram, recomp_context* ctx) {
     _return(ctx, static_cast<s32>(zelda64::get_film_grain_mode() == zelda64::FilmGrainMode::On));
-}
-
-extern "C" void recomp_get_moonjump(uint8_t* rdram, recomp_context* ctx) {
-    _return(ctx, static_cast<int>(zelda64::get_moonjump()));
-}
-
-extern "C" void recomp_get_always_max_bomb(uint8_t* rdram, recomp_context* ctx) {
-    _return(ctx, static_cast<int>(zelda64::get_always_max_bomb()));
-}
-
-extern "C" void recomp_get_always_max_fire(uint8_t* rdram, recomp_context* ctx) {
-    _return(ctx, static_cast<int>(zelda64::get_always_max_fire()));
-}
-
-extern "C" void recomp_get_always_have_remote_bombs(uint8_t* rdram, recomp_context* ctx) {
-    _return(ctx, static_cast<int>(zelda64::get_always_have_remote_bombs()));
-}
-
-extern "C" void recomp_get_always_have_red_bombs(uint8_t* rdram, recomp_context* ctx) {
-    _return(ctx, static_cast<int>(zelda64::get_always_have_red_bombs()));
-}
-
-extern "C" void recomp_get_infinite_credits(uint8_t* rdram, recomp_context* ctx) {
-    _return(ctx, static_cast<int>(zelda64::get_infinite_credits()));
-}
-
-extern "C" void recomp_get_infinite_lives(uint8_t* rdram, recomp_context* ctx) {
-    _return(ctx, static_cast<int>(zelda64::get_infinite_lives()));
 }
 
 extern "C" void recomp_load_overlays(uint8_t * rdram, recomp_context * ctx) {
