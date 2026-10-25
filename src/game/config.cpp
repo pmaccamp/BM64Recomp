@@ -417,7 +417,8 @@ bool save_controls_config(const std::filesystem::path& path) {
             {"enabled", calibration.enabled},
             {"center_x", calibration.center_x}, {"center_y", calibration.center_y},
             {"left", calibration.left}, {"right", calibration.right},
-            {"up", calibration.up}, {"down", calibration.down}
+            {"up", calibration.up}, {"down", calibration.down},
+            {"deadzone", calibration.deadzone}
         };
 
         // Save bindings
@@ -536,6 +537,7 @@ bool load_controls_config(const std::filesystem::path& path) {
                     calibration.right = calibration_it->at("right").get<float>();
                     calibration.up = calibration_it->at("up").get<float>();
                     calibration.down = calibration_it->at("down").get<float>();
+                    calibration.deadzone = calibration_it->value("deadzone", 0.0f);
                     recomp::set_stick_calibration(p, calibration);
                 }
                 catch (const nlohmann::json::exception&) {

@@ -564,8 +564,6 @@ void draw_hook(plume::RenderCommandList* command_list, plume::RenderFramebuffer*
 
     std::lock_guard lock{ ui_state_mutex };
 
-    recompui::update_control_calibration();
-
     SDL_Event cur_event{};
 
     bool mouse_moved = false;
@@ -587,6 +585,7 @@ void draw_hook(plume::RenderCommandList* command_list, plume::RenderFramebuffer*
     while (recompui::try_deque_event(cur_event)) {
         // Sweeping the stick during calibration must not navigate the menus.
         if (recompui::is_stick_calibration_active() && cur_event.type == SDL_CONTROLLERAXISMOTION) {
+            recompui::sample_control_calibration(cur_event.caxis);
             latest_controller_key_pressed = SDLK_UNKNOWN;
             ui_state->await_stick_return_x = true;
             ui_state->await_stick_return_y = true;
@@ -739,6 +738,9 @@ void draw_hook(plume::RenderCommandList* command_list, plume::RenderFramebuffer*
         }
     } // end dequeue event loop
 
+    // Consume every axis event before sampling the current state, so a brief
+    // rebound between rendered frames is not lost or processed out of order.
+    recompui::update_control_calibration();
     // Handle controller key repeats.
     if (recompui::is_stick_calibration_active()) latest_controller_key_pressed = SDLK_UNKNOWN;
     if (latest_controller_key_pressed != SDLK_UNKNOWN) {

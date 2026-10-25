@@ -831,13 +831,9 @@ float controller_axis_state_port(int32_t input_id, bool allow_suppression, int p
     return false;
 }
 
-bool recomp::get_raw_controller_stick(int port, float* x_out, float* y_out, int32_t* controller_id_out) {
-    if (port < 0 || port >= recomp::max_ports || get_port_mode(port) != ControllerPortMode::Controller) return false;
-    std::lock_guard lock{InputState.cur_controllers_mutex};
-    auto controller = InputState.port_controllers[port];
-    if (controller == nullptr || !SDL_GameControllerGetAttached(controller)) return false;
-
-    auto read_direction = [port](GameInput input, float& value) {
+bool recomp::map_controller_stick(int port, std::span<const float> axes, float* x_out, float* y_out) {
+    if (port < 0 || port >= recomp::max_ports || axes.size() != SDL_CONTROLLER_AXIS_MAX) return false;
+    auto read_direction = [port, axes](GameInput input, float& value) {
         bool has_axis = false;
         value = 0.0f;
         for (size_t slot = 0; slot < bindings_per_input; ++slot) {
@@ -845,7 +841,8 @@ bool recomp::get_raw_controller_stick(int port, float* x_out, float* y_out, int3
             if (field.input_type == static_cast<uint32_t>(InputType::ControllerAnalog)
                 && field.input_id != 0 && field.input_id >= -SDL_CONTROLLER_AXIS_MAX
                 && field.input_id <= SDL_CONTROLLER_AXIS_MAX) {
-                value += controller_axis_state_port(field.input_id, false, port);
+                float axis = axes[std::abs(field.input_id) - 1];
+                value += std::max(field.input_id < 0 ? -axis : axis, 0.0f);
                 has_axis = true;
             }
         }
@@ -857,6 +854,21 @@ bool recomp::get_raw_controller_stick(int port, float* x_out, float* y_out, int3
         || !read_direction(GameInput::Y_AXIS_POS, up) || !read_direction(GameInput::Y_AXIS_NEG, down)) return false;
     *x_out = right - left;
     *y_out = up - down;
+    return true;
+}
+
+bool recomp::get_raw_controller_stick(int port, float* x_out, float* y_out, int32_t* controller_id_out,
+    std::span<float> axes_out) {
+    if (port < 0 || port >= recomp::max_ports || get_port_mode(port) != ControllerPortMode::Controller) return false;
+    std::lock_guard lock{InputState.cur_controllers_mutex};
+    auto controller = InputState.port_controllers[port];
+    if (controller == nullptr || !SDL_GameControllerGetAttached(controller)) return false;
+    std::array<float, SDL_CONTROLLER_AXIS_MAX> axes;
+    for (size_t i = 0; i < axes.size(); ++i) {
+        axes[i] = SDL_GameControllerGetAxis(controller, static_cast<SDL_GameControllerAxis>(i)) / 32768.0f;
+    }
+    if (!map_controller_stick(port, axes, x_out, y_out)) return false;
+    if (axes_out.size() == axes.size()) std::copy(axes.begin(), axes.end(), axes_out.begin());
     *controller_id_out = InputState.port_controller_ids[port];
     return true;
 }

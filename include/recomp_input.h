@@ -114,7 +114,10 @@ namespace recomp {
     StickCalibration get_stick_calibration(int port);
     bool set_stick_calibration(int port, const StickCalibration& calibration);
     // Reads the assigned stick before calibration, deadzone, or sensitivity.
-    bool get_raw_controller_stick(int port, float* x_out, float* y_out, int32_t* controller_id_out);
+    bool get_raw_controller_stick(int port, float* x_out, float* y_out, int32_t* controller_id_out,
+        std::span<float> axes_out = {});
+    // Maps a captured set of SDL axes using the player's movement bindings.
+    bool map_controller_stick(int port, std::span<const float> axes, float* x_out, float* y_out);
 
     void start_scanning_input(InputDevice device);
     void stop_scanning_input();

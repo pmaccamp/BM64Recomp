@@ -62,7 +62,7 @@ If you're interested in making texture packs, check out [the RT64 documentation]
 #### Additional Control Options
 Customize your experience by setting your stick deadzone to your liking, as well as adjusting the Y axis inversion for aiming.
 
-For uneven or reduced stick range, open **Controls**, select the player and **Controller**, then choose **Calibrate Stick**. Release the stick to capture its center, push it fully around the edge until all eight directions are recorded, then release it and choose **Save Calibration**. Center and directional range adjustments are saved separately for each player; **Reset Calibration** restores the standard response, and **Stick Sensitivity** provides additional manual adjustment.
+For uneven stick range or unwanted turning after releasing the stick, open **Controls**, select the player and **Controller**, then choose **Calibrate Stick**. Release the stick to capture its center, push it fully around the edge until all eight directions are recorded, then follow the prompts to push and release it twice in each direction. Let it spring back on its own so calibration can measure snapback and set a deadzone. Choose **Save Calibration** once the stick settles. Center, directional range, and deadzone adjustments are saved separately for each player; **Reset Calibration** restores the standard response, and **Stick Sensitivity** provides additional manual adjustment. Existing calibrations keep their previous response until you recalibrate.
 
 #### Low Input Lag
 This project has been optimized to have as little input lag as possible, making the game feel more responsive than ever!

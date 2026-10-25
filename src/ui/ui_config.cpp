@@ -103,6 +103,8 @@ static std::vector<std::string> connected_controller_names;
 static recomp::StickCalibrationSession stick_calibration_session;
 static int calibration_port = -1;
 static int32_t calibration_controller_id = -1;
+static std::array<float, SDL_CONTROLLER_AXIS_MAX> calibration_axes{};
+static uint32_t calibration_started_ticks = 0;
 static std::string calibration_message;
 
 static void dirty_calibration_variables() {
@@ -519,6 +521,30 @@ bool recompui::is_stick_calibration_active() {
     return stick_calibration_session.active();
 }
 
+static void sample_stick_calibration(float x, float y, double now) {
+    auto old_stage = stick_calibration_session.stage();
+    int old_directions = stick_calibration_session.directions_recorded();
+    int old_flicks = stick_calibration_session.flicks_recorded();
+    bool old_ready = stick_calibration_session.ready();
+    stick_calibration_session.sample(x, y, now);
+    if (old_stage != stick_calibration_session.stage()
+        || old_directions != stick_calibration_session.directions_recorded()
+        || old_flicks != stick_calibration_session.flicks_recorded()
+        || old_ready != stick_calibration_session.ready()) dirty_calibration_variables();
+}
+
+void recompui::sample_control_calibration(const SDL_ControllerAxisEvent& event) {
+    if (!stick_calibration_session.active() || event.which != calibration_controller_id
+        || event.axis >= calibration_axes.size()) return;
+    int32_t elapsed = static_cast<int32_t>(event.timestamp - calibration_started_ticks);
+    if (elapsed < 0) return; // Discard events queued before the user started calibration.
+    calibration_axes[event.axis] = event.value / 32768.0f;
+    float x, y;
+    if (recomp::map_controller_stick(calibration_port, calibration_axes, &x, &y)) {
+        sample_stick_calibration(x, y, elapsed / 1000.0);
+    }
+}
+
 void recompui::update_control_calibration() {
     if (!stick_calibration_session.active()) return;
     if (!recompui::is_context_shown(config_context) || recompui::is_prompt_open()
@@ -533,14 +559,7 @@ void recompui::update_control_calibration() {
         cancel_stick_calibration("Calibration canceled: controller changed or disconnected. Previous settings kept.");
         return;
     }
-    auto old_stage = stick_calibration_session.stage();
-    int old_directions = stick_calibration_session.directions_recorded();
-    bool old_ready = stick_calibration_session.ready();
-    double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    stick_calibration_session.sample(x, y, now);
-    if (old_stage != stick_calibration_session.stage()
-        || old_directions != stick_calibration_session.directions_recorded()
-        || old_ready != stick_calibration_session.ready()) dirty_calibration_variables();
+    sample_stick_calibration(x, y, (SDL_GetTicks() - calibration_started_ticks) / 1000.0);
 }
 
 // Helper copied from RmlUi to get a named child.
@@ -1023,14 +1042,16 @@ public:
                 recomp::cancel_scanning_input();
                 float x, y;
                 int32_t controller_id;
-                if (!recomp::get_raw_controller_stick(selected_port, &x, &y, &controller_id)) {
+                if (!recomp::get_raw_controller_stick(selected_port, &x, &y, &controller_id, calibration_axes)) {
                     cancel_stick_calibration("Connect a controller and map its stick to Up, Down, Left, and Right before calibrating.");
                     return;
                 }
                 calibration_port = selected_port;
                 calibration_controller_id = controller_id;
                 calibration_message.clear();
+                calibration_started_ticks = SDL_GetTicks();
                 stick_calibration_session.begin();
+                stick_calibration_session.sample(x, y, 0.0);
                 dirty_calibration_variables();
             });
         constructor.BindEventCallback("save_stick_calibration",
@@ -1040,7 +1061,9 @@ public:
                 if (!stick_calibration_session.finish(calibration)) return;
                 recomp::set_stick_calibration(selected_port, calibration);
                 recomp::set_stick_sensitivity(selected_port, 100);
-                cancel_stick_calibration("Calibration saved for P" + std::to_string(selected_port + 1) + ". Sensitivity is now 100%; fine-tune it below if needed.");
+                cancel_stick_calibration("Calibration saved for P" + std::to_string(selected_port + 1)
+                    + ". Snapback deadzone: " + std::to_string(static_cast<int>(std::lround(calibration.deadzone * 100)))
+                    + "%. Sensitivity is now 100%; fine-tune it below if needed.");
                 controls_model_handle.DirtyVariable("stick_sensitivity");
                 zelda64::save_config();
             });
@@ -1060,17 +1083,26 @@ public:
         constructor.BindFunc("calibration_status", [](Rml::Variant& out) {
             if (stick_calibration_session.stage() == recomp::StickCalibrationSession::Stage::Center) {
                 out = "Step 1: Release the stick and leave it centered for one second.";
+            } else if (stick_calibration_session.stage() == recomp::StickCalibrationSession::Stage::Snapback) {
+                out = stick_calibration_session.flicks_recorded() == 8
+                    ? std::string("Deadzone measured. Leave the stick centered and choose Save Calibration.")
+                    : "Step 3: Push fully " + std::string(stick_calibration_session.flick_direction())
+                        + " briefly, then let go completely. Wait for it to settle; do not guide it back. Releases: "
+                        + std::to_string(stick_calibration_session.flicks_recorded()) + "/8 (twice per direction).";
             } else if (stick_calibration_session.active()) {
                 int directions = stick_calibration_session.directions_recorded();
                 out = directions == 8
-                    ? "All 8 directions recorded. Release the stick, then choose Save Calibration."
+                    ? "All 8 directions recorded. Release the stick to measure snapback next."
                     : "Step 2: Push the stick fully to the edge and slowly circle it twice, including diagonals. Directions recorded: " + std::to_string(directions) + "/8.";
             } else if (!calibration_message.empty()) {
                 out = calibration_message;
             } else {
-                out = recomp::get_stick_calibration(selected_port).enabled
-                    ? "Calibrated for this player. Recalibrate after changing controllers."
-                    : "Calibrate to correct uneven stick range. Settings are saved separately for each player.";
+                auto calibration = recomp::get_stick_calibration(selected_port);
+                out = calibration.enabled
+                    ? "Calibrated for this player. Snapback deadzone: "
+                        + std::to_string(static_cast<int>(std::lround(calibration.deadzone * 100)))
+                        + "%. Recalibrate after changing controllers."
+                    : std::string("Calibrate stick range and snapback deadzone. Settings are saved separately for each player.");
             }
         });
 

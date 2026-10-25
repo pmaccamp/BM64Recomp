@@ -168,8 +168,8 @@ bool recomp::get_n64_input(int controller_num, uint16_t* buttons_out, float* x_o
             float joystick_y = recomp::get_input_analog_port(ct_mappings[(size_t)GameInput::Y_AXIS_POS], controller_num)
                             - recomp::get_input_analog_port(ct_mappings[(size_t)GameInput::Y_AXIS_NEG], controller_num);
 
-            recomp::get_stick_calibration(controller_num).apply(joystick_x, joystick_y);
-            recomp::apply_joystick_deadzone(joystick_x, joystick_y, &joystick_x, &joystick_y);
+            recomp::get_stick_calibration(controller_num).apply(joystick_x, joystick_y,
+                recomp::get_joystick_deadzone() / 100.0f);
 
             // Adapters and worn N64 sticks may not reach the full reported range.
             // Limit both axes together to retain the stick's direction at saturation.
